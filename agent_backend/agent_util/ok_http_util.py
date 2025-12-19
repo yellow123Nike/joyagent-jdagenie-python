@@ -1,7 +1,12 @@
+
 import threading
+import logging
+from typing import Dict, Optional
 import requests
 import httpx
-from typing import Dict, Optional, Callable
+from abc import ABC, abstractmethod
+
+logger = logging.getLogger(__name__)
 
 
 class OkHttpUtil:
@@ -9,6 +14,10 @@ class OkHttpUtil:
     _sse_client: Optional[httpx.Client] = None
     _lock = threading.Lock()
 
+    CONNECT_TIMEOUT = 30
+    READ_TIMEOUT = 60
+
+    # 连接池与资源复用
     @classmethod
     def get_http_client(cls) -> requests.Session:
         if cls._http_session is None:
@@ -30,30 +39,29 @@ class OkHttpUtil:
         if cls._sse_client is None:
             with cls._lock:
                 if cls._sse_client is None:
-                    cls._sse_client = httpx.Client(
-                        timeout=None  # readTimeout = 0 (无限)
-                    )
+                    cls._sse_client = httpx.Client(timeout=None)
         return cls._sse_client
 
     @staticmethod
     def post_new(url: str, headers: Dict[str, str], json_body: str) -> requests.Response:
         client = OkHttpUtil.get_http_client()
-        response = client.post(
+        return client.post(
             url,
             data=json_body,
             headers=headers,
-            timeout=(30, 60),  # connectTimeout, readTimeout
+            timeout=(OkHttpUtil.CONNECT_TIMEOUT, OkHttpUtil.READ_TIMEOUT),
         )
-        return response
 
+    # 强约束调用（失败即错误）
     @staticmethod
     def post_json_body(url: str, headers: Dict[str, str], json_body: str) -> str:
-        print(f"post调用接口 {url} 参数：{json_body}, {headers}")
+        logger.info("POST %s payload=%s headers=%s", url, json_body, headers)
         response = OkHttpUtil.post_new(url, headers, json_body)
         if not response.ok:
             raise RuntimeError(f"调用接口 {url} 失败: {response.text}")
         return response.text
 
+    # 弱约束调用（失败可接受）
     @staticmethod
     def post_json(
         url: str,
@@ -61,35 +69,37 @@ class OkHttpUtil:
         headers: Optional[Dict[str, str]],
         timeout: int,
     ) -> Optional[str]:
-        response = requests.post(
+        client = OkHttpUtil.get_http_client()
+        response = client.post(
             url,
             data=json_params,
             headers=headers,
             timeout=(timeout, timeout),
         )
-        if response.ok:
-            return response.text
-        return None
+        return response.text if response.ok else None
 
-class SseEventListener:
-    def on_event(self, event: str):
-        pass
+    class SseEventListener(ABC):
+        @abstractmethod
+        def on_event(self, event: str): ...
 
-    def on_complete(self):
-        pass
+        @abstractmethod
+        def on_complete(self): ...
 
-    def on_error(self, e: Exception):
-        pass
+        @abstractmethod
+        def on_error(self, e: Exception): ...
+
+    # 同步 SSE
     @staticmethod
     def request_sse(
         url: str,
         json_body: str,
-        headers: Dict[str, str],
-        event_listener: SseEventListener,
+        headers: Optional[Dict[str, str]],
+        event_listener: "OkHttpUtil.SseEventListener",
     ):
-        print(f"调用sse接口 {url} 参数：{json_body}, {headers}")
-        client = OkHttpUtil.get_sse_client()
+        headers = headers or {}
+        logger.info("SSE POST %s payload=%s headers=%s", url, json_body, headers)
 
+        client = OkHttpUtil.get_sse_client()
         try:
             with client.stream(
                 "POST",
@@ -101,35 +111,21 @@ class SseEventListener:
                 },
                 content=json_body,
             ) as response:
-                for line in response.iter_lines():
-                    if line:
-                        event_listener.on_event(line.decode("utf-8"))
+                for chunk in response.iter_text():
+                    if not chunk:
+                        continue
+                    for line in chunk.splitlines():
+                        if not line:
+                            continue
+                        line = line.strip()   # 🔥 关键一行
+                        if not line.startswith("data"):
+                            continue
+                        # 兼容 data:xxxx / data: xxxx
+                        _, _, payload = line.partition(":")
+                        payload = payload.strip()
+
+                        event_listener.on_event(payload)
+
                 event_listener.on_complete()
         except Exception as e:
             event_listener.on_error(e)
-    @staticmethod
-    def sse_request_async(
-        url: str,
-        json_body: str,
-        headers: Dict[str, str],
-        timeout: int,
-        event_listener: SseEventListener,
-    ):
-        def _run():
-            try:
-                with httpx.Client(timeout=timeout) as client:
-                    with client.stream(
-                        "POST",
-                        url,
-                        headers=headers,
-                        content=json_body,
-                    ) as response:
-                        for line in response.iter_lines():
-                            if line:
-                                event_listener.on_event(line.decode("utf-8"))
-                        event_listener.on_complete()
-            except Exception as e:
-                event_listener.on_error(e)
-
-        thread = threading.Thread(target=_run, daemon=True)
-        thread.start()

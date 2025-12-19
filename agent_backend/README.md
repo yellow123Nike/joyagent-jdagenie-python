@@ -29,4 +29,4 @@
   通用工具
   date_util.py: 获取当前日期
   file_util.py: 整理易被llm理解的文件结构
-  ok_http_util.py: 
+  ok_http_util.py: 强 / 弱两类 HTTP 调用<post_json()--弱约束调用（失败可接受）><post_json_body()--强约束调用（失败即错误）>,SSE 同步
