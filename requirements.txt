@@ -6,3 +6,4 @@ pydantic==2.12.5
 openai==2.14.0
 tiktoken==0.12.0
 tenacity==9.1.2
+pytest-asyncio

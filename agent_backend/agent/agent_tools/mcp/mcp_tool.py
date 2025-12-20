@@ -1,13 +1,13 @@
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 from agent_backend.agent.agent_tools.base_tool import BaseTool
-from agent_backend.agent.agent_core.agent_context import AgentContext
 from agent_backend.agent.agent_util.ok_http_util import OkHttpUtil
 from agent_backend.agent.agent_util.app_context import ApplicationContextHolder
 from agent_backend.agent_config.genie_config import GenieConfig
-
+if TYPE_CHECKING:
+    from agent_backend.agent.agent_core.agent_context import AgentContext
 logger = logging.getLogger(__name__)
 
 class McpTool(BaseTool):
@@ -15,7 +15,7 @@ class McpTool(BaseTool):
     对齐 Java: com.jd.genie.agent.tool.McpTool
     """
 
-    def __init__(self, agent_context: AgentContext):
+    def __init__(self, agent_context: "AgentContext"):
         self.agent_context = agent_context
 
     # =============================

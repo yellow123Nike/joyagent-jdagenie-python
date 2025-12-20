@@ -14,8 +14,8 @@ class OkHttpUtil:
     _sse_client: Optional[httpx.Client] = None
     _lock = threading.Lock()
 
-    CONNECT_TIMEOUT = 30
-    READ_TIMEOUT = 60
+    CONNECT_TIMEOUT = 240
+    READ_TIMEOUT = 240
 
     # 连接池与资源复用
     @classmethod

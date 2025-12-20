@@ -1,11 +1,11 @@
 import logging
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 from agent_backend.agent.agent_schema.tool.mcp_tool_info import McpToolInfo
-from agent_backend.agent.agent_core.agent_context import AgentContext
 from agent_backend.agent.agent_tools.mcp.mcp_tool import McpTool
 from agent_backend.agent.agent_tools.base_tool import BaseTool
 logger = logging.getLogger(__name__)
-
+if TYPE_CHECKING:
+    from agent_backend.agent.agent_core.agent_context import AgentContext
 
 class ToolCollection:
     """
@@ -16,7 +16,7 @@ class ToolCollection:
     def __init__(self):
         self.tool_map: Dict[str, BaseTool] = {}
         self.mcp_tool_map: Dict[str, McpToolInfo] = {}
-        self.agent_context: Optional[AgentContext] = None
+        self.agent_context: Optional["AgentContext"] = None
 
         # ===== 数字员工相关 =====
         # task 未并发的情况下：
