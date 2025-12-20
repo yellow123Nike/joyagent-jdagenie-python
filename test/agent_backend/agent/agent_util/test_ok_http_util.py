@@ -3,7 +3,7 @@
 import json
 import logging
 
-from agent_backend.agent_util.ok_http_util import OkHttpUtil
+from agent_backend.agent.agent_util.ok_http_util import OkHttpUtil
 
 
 class TestSseListener:

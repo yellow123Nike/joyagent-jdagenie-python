@@ -1,5 +1,5 @@
 from typing import List, Optional
-from agent_backend.agent_schema.file import File
+from agent_backend.agent.agent_schema.file import File
 
 
 class FileUtil:

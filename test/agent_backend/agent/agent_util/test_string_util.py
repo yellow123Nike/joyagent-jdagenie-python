@@ -1,5 +1,5 @@
 import re
-from agent_backend.agent_util.string_util import (
+from agent_backend.agent.agent_util.string_util import (
     generate_random_string,
     text_desensitization,
     remove_special_chars,

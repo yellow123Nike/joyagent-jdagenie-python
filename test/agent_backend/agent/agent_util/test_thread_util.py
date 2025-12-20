@@ -1,5 +1,5 @@
 import time
-from agent_backend.agent_util.thread_util import ThreadUtil, CountDownLatch
+from agent_backend.agent.agent_util.thread_util import ThreadUtil, CountDownLatch
 
 def test_execute_runs_task():
     result = []
