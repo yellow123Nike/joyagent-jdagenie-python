@@ -29,7 +29,7 @@ class ToolCollection:
     # 添加工具
     # =============================
     def add_tool(self, tool: BaseTool) -> None:
-        self.tool_map[tool.get_name()] = tool
+        self.tool_map[tool.name] = tool
 
     # =============================
     # 获取工具

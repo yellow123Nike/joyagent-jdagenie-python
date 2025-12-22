@@ -1,16 +1,24 @@
 import asyncio
+import copy
+from dataclasses import dataclass
+from enum import Enum
 import json
 import logging
+import re
+import time
+import uuid
 from openai import AsyncOpenAI
 from typing import Any, List, Dict, Optional
 import tiktoken
 from agent_backend.agent.agent_llms.llm_setting_params import LLMParams
 from agent_backend.agent.agent_core.agent_context import AgentContext
 from agent_backend.agent.agent_schema.message import Message
+from agent_backend.agent.agent_schema.tool.tool_choise import ToolChoice
+from agent_backend.agent.agent_tools.tool_collection import ToolCollection
 from agent_backend.agent.agent_util.app_context import ApplicationContextHolder
 from agent_backend.agent.agent_util.string_util import text_desensitization
 from agent_backend.agent_config.genie_config import GenieConfig
-from agent_backend.agent.agent_util.ok_http_util import OkHttpUtil
+from agent_backend.agent.agent_schema.tool.tool_call import ToolCall
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -18,7 +26,53 @@ from tenacity import (
     retry_if_exception_type,
 )
 from openai import RateLimitError, APIConnectionError, Timeout
+
+from agent_backend.agent_config.prompt import STRUCT_PARSE_TOOL_SYSTEM_PROMPT
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ToolCallResponse:
+    content: Optional[str]
+    tool_calls: List[ToolCall]
+    finish_reason: Optional[str] = None
+    total_tokens: Optional[int] = None
+    duration: Optional[float] = None
+
+@dataclass
+class OpenAIFunction:
+    name: Optional[str] = None
+    arguments: str = ""
+
+
+@dataclass
+class OpenAIToolCall:
+    index: Optional[int] = None
+    id: Optional[str] = None
+    type: Optional[str] = None
+    function: Optional[OpenAIFunction] = None
+
+
+@dataclass
+class OpenAIDelta:
+    content: Optional[str] = None
+    tool_calls: Optional[List[OpenAIToolCall]] = None
+
+
+@dataclass
+class OpenAIChoice:
+    index: Optional[int] = None
+    delta: Optional[OpenAIDelta] = None
+    logprobs: Optional[object] = None
+    finish_reason: Optional[str] = None
+
+class FunctionCallType(Enum):
+    STRUCT_PARSE = "struct_parse"  #把工具调用当成文本结构解析问题
+    FUNCTION_CALL = "function_call" #让模型走 OpenAI 原生的工具调用协议
+
+    @classmethod
+    def is_valid(cls, value: "FunctionCallType") -> bool:
+        return value in cls
 
 class LLMClient:
     def __init__(self, params: LLMParams):
@@ -193,12 +247,12 @@ class LLMClient:
         self,
         context: AgentContext,
         messages: List[Message],
-        system_msgs: Optional[List[Message]],
+        system_msgs: Optional[Message],
     ) -> List[dict]:
         # -------- 1.1 格式化 messages --------
         if system_msgs:
             formatted_system_msgs = self.format_messages(
-                system_msgs,
+                [system_msgs],
                 is_claude=self.is_claude,
             )
             formatted_messages = list(formatted_system_msgs)
@@ -219,6 +273,59 @@ class LLMClient:
             )
 
         return formatted_messages
+
+    #function_call-param
+    def add_function_name_param(
+        self,
+        parameters: Dict[str, Any],
+        tool_name: str,
+    ):
+        """
+        """
+        new_parameters = copy.deepcopy(parameters)
+        new_required = ["function_name"]
+        if "required" in parameters and parameters["required"] is not None:
+            new_required.extend(parameters["required"])
+        new_parameters["required"] = new_required
+        new_properties: Dict[str, Any] = {}
+
+        function_name_map = {
+            "description": f"默认值为工具名: {tool_name}",
+            "type": "string",
+        }
+        new_properties["function_name"] = function_name_map
+
+        if "properties" in parameters and parameters["properties"] is not None:
+            new_properties.update(parameters["properties"])
+
+        new_parameters["properties"] = new_properties
+
+        return new_parameters
+
+    def to_openai_tool_choice(
+        self,
+        tool_choice: ToolChoice,
+        forced_tool_name: Optional[str] = None,
+    ):
+        """
+        将内部 ToolChoice 映射为 OpenAI chat.completions 的 tool_choice 参数。
+        - NONE/AUTO: 直接返回字符串
+        - REQUIRED:
+            - 如果指定 forced_tool_name：返回强制调用某工具的 object
+            - 否则：降级为 "auto"（避免 OpenAI 不支持 "required" 导致报错）
+        """
+        if tool_choice == ToolChoice.NONE:
+            return "none"
+        if tool_choice == ToolChoice.AUTO:
+            return "auto"
+
+        # REQUIRED
+        if forced_tool_name:
+            return {"type": "function", "function": {"name": forced_tool_name}}
+
+        # 无法明确强制哪一个工具时，不建议传 "required"
+        # 因为 chat.completions 未必接受；降级为 auto 更稳
+        return "auto"
 
     async def ask_llm_once(
         self,
@@ -266,6 +373,175 @@ class LLMClient:
 
         except Exception:
             logger.exception("%s ask_llm_stream failed", context.request_id)
+            raise
+
+    async def ask_tool(
+        self,
+        context: AgentContext,
+        messages: List[Message],
+        tools: ToolCollection,
+        tool_choice: ToolChoice,
+        system_msgs: Optional[Message],
+        function_call_type:FunctionCallType=FunctionCallType.FUNCTION_CALL
+    ) -> ToolCallResponse:
+        try:
+            # ===== 1. ToolChoice 校验=====
+            if not ToolChoice.is_valid(tool_choice):
+                raise ValueError(f"Invalid tool_choice: {tool_choice}")
+            start_time = time.time()
+            # ===== 2. 构造 OpenAI tools（对齐 function_call 分支） =====
+            formatted_tools: list[dict] = []
+            string_builder: list[str] = []
+            if function_call_type is FunctionCallType.STRUCT_PARSE:
+                # ===== struct_parse 分支 =====
+                string_builder.append(STRUCT_PARSE_TOOL_SYSTEM_PROMPT)
+                # ---------- base tool ----------
+                for tool in tools.tool_map.values():
+                    function_map = {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": self.add_function_name_param(
+                            tool.to_params(),
+                            tool.name,
+                        ),
+                    }
+                    string_builder.append(
+                        f"- `{tool.name}`\n```json {json.dumps(function_map, ensure_ascii=False)} ```\n"
+                    )
+
+                # ---------- mcp tool ----------
+                for tool in tools.mcp_tool_map.values():
+                    parameters = json.loads(tool.parameters)
+                    function_map = {
+                        "name": tool.name,
+                        "description": tool.desc,
+                        "parameters": self.add_function_name_param(
+                            parameters,
+                            tool.name,
+                        ),
+                    }
+                    string_builder.append(
+                        f"- `{tool.name}`\n```json {json.dumps(function_map, ensure_ascii=False)} ```\n"
+                    )
+                struct_prompt = "\n".join(string_builder)
+                system_msgs.content = (
+                    (system_msgs.content or "")
+                    + "\n"
+                    + struct_prompt
+                )
+            else:
+                # ========= base tool =========
+                for tool in tools.tool_map.values():
+                    function_map = {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.to_params(),  # 注意：没有 add_function_name_param
+                    }
+
+                    tool_map = {
+                        "type": "function",
+                        "function": function_map,
+                    }
+
+                    formatted_tools.append(tool_map)
+
+                # ========= mcp tool =========
+                for tool in tools.mcp_tool_map.values():
+                    parameters = json.loads(tool.parameters)
+
+                    function_map = {
+                        "name": tool.name,
+                        "description": tool.desc,
+                        "parameters": parameters,
+                    }
+
+                    tool_map = {
+                        "type": "function",
+                        "function": function_map,
+                    }
+
+                    formatted_tools.append(tool_map)
+            
+            # ===== 3. 格式化消息 =====
+            formatted_messages = self._prepare_messages(
+                context, messages, system_msgs
+            )
+
+            # ===== 4. 调用 OpenAI =====
+            response =  await asyncio.wait_for(self.client.chat.completions.create(
+                model=self.params.model_name,
+                messages=formatted_messages,
+                tools=formatted_tools,
+                tool_choice=self.to_openai_tool_choice(tool_choice),   
+                temperature=self.params.temperature,
+                max_tokens=self.params.max_tokens,
+                ),
+                timeout=240,
+            )
+
+            # ===== 5. 解析响应 =====
+            if not response.choices or response.choices[0].message is None:
+                raise ValueError("Invalid or empty response from LLM")
+
+            choice = response.choices[0]
+            message = choice.message
+
+            content = message.content if message.content != "null" else None
+            tool_calls: List["ToolCall"] = []
+            if function_call_type is FunctionCallType.STRUCT_PARSE:
+                pattern = r"```json\s*([\s\S]*?)\s*```"
+                content =re.findall(pattern, content or "")
+                for json_block in content:
+                    try:
+                        data = json.loads(json_block)
+                        tool_name = data.pop("function_name", None)
+                        if not tool_name:
+                            continue
+
+                        tool_calls.append(
+                            ToolCall(
+                                id=str(uuid.uuid4()),
+                                type="function",
+                                function=ToolCall.Function(
+                                    name=tool_name,
+                                    arguments=json.dumps(data, ensure_ascii=False),
+                                ),
+                            )
+                        )
+                    except Exception:
+                        # 对齐 Java：解析失败直接忽略
+                        continue
+            else:
+                if message.tool_calls:
+                    for tc in message.tool_calls:
+                        tool_calls.append(
+                            ToolCall(
+                                id=tc.id,
+                                type=tc.type,
+                                function=ToolCall.Function(
+                                    name=tc.function.name,
+                                    arguments=tc.function.arguments,
+                                ),
+                            )
+                        )
+            finish_reason = choice.finish_reason
+            # ===== usage =====
+            total_tokens = response.usage.total_tokens if response.usage else None
+            # ===== duration =====
+            duration_ms = int((time.time() - start_time) * 1000)
+            return ToolCallResponse(
+                content=content,
+                tool_calls=tool_calls,
+                finish_reason=finish_reason,
+                total_tokens=total_tokens,
+                duration=duration_ms,
+            )
+
+        except Exception as e:
+            print(f"%s Unexpected error in ask_tool: %s",
+                context.request_id,
+                str(e),
+            )
             raise
 
 
@@ -328,4 +604,5 @@ class LLMClient:
 
             if delta and delta.content:
                 yield delta.content
+
 
