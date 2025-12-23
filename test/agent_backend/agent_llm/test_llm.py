@@ -10,9 +10,12 @@ from agent_backend.agent.agent_tools.base_tool import BaseTool
 from agent_backend.agent.agent_tools.tool_collection import ToolCollection
 
 params = LLMParams(
+    # model_name="Qwen/Qwen3-32B-AWQ",
+    # api_key="sk-",
+    # base_url="http://v1/",
     model_name="Qwen/Qwen3-32B-AWQ",
-    api_key="sk-a629905880b04cae83038bdae5c88859",
-    base_url="http://192.168.88.235:18006/v1/",
+    api_key="sk-",
+    base_url="http:///v1/",
     temperature=0.7,
     max_tokens=8024,
     is_claude=False,

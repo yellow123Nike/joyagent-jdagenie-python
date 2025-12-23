@@ -15,9 +15,7 @@ from agent_backend.agent.agent_core.agent_context import AgentContext
 from agent_backend.agent.agent_schema.message import Message
 from agent_backend.agent.agent_schema.tool.tool_choise import ToolChoice
 from agent_backend.agent.agent_tools.tool_collection import ToolCollection
-from agent_backend.agent.agent_util.app_context import ApplicationContextHolder
 from agent_backend.agent.agent_util.string_util import text_desensitization
-from agent_backend.agent_config.genie_config import GenieConfig
 from agent_backend.agent.agent_schema.tool.tool_call import ToolCall
 from tenacity import (
     retry,
@@ -27,7 +25,7 @@ from tenacity import (
 )
 from openai import RateLimitError, APIConnectionError, Timeout
 
-from agent_backend.agent_config.prompt import STRUCT_PARSE_TOOL_SYSTEM_PROMPT
+from agent_backend.agent.agent_llms.prompt import SENSITIVE_PATTERNS, STRUCT_PARSE_TOOL_SYSTEM_PROMPT
 logger = logging.getLogger(__name__)
 
 
@@ -38,33 +36,6 @@ class ToolCallResponse:
     finish_reason: Optional[str] = None
     total_tokens: Optional[int] = None
     duration: Optional[float] = None
-
-@dataclass
-class OpenAIFunction:
-    name: Optional[str] = None
-    arguments: str = ""
-
-
-@dataclass
-class OpenAIToolCall:
-    index: Optional[int] = None
-    id: Optional[str] = None
-    type: Optional[str] = None
-    function: Optional[OpenAIFunction] = None
-
-
-@dataclass
-class OpenAIDelta:
-    content: Optional[str] = None
-    tool_calls: Optional[List[OpenAIToolCall]] = None
-
-
-@dataclass
-class OpenAIChoice:
-    index: Optional[int] = None
-    delta: Optional[OpenAIDelta] = None
-    logprobs: Optional[object] = None
-    finish_reason: Optional[str] = None
 
 class FunctionCallType(Enum):
     STRUCT_PARSE = "struct_parse"  #把工具调用当成文本结构解析问题
@@ -111,11 +82,10 @@ class LLMClient:
                 message_map["content"] = multimodal
 
             # ===== tool calls =====
-            #Claude 把「工具调用」当作一种消息类型（content block），
-            #GPT 把「工具调用」当作 message 的一个字段（tool_calls）
+                #Claude 把「工具调用」当作一种消息类型（content block），
+                #GPT 把「工具调用」当作 message 的一个字段（tool_calls）
             elif msg.tool_calls:
                 message_map["role"] = msg.role.value
-
                 if is_claude:
                     claude_calls = []
                     for tc in msg.tool_calls:
@@ -140,11 +110,12 @@ class LLMClient:
                     ]
 
             # ===== tool result =====
+                #工具执行结果重新喂给大模型
             elif msg.tool_call_id:
-                genie_config: GenieConfig = ApplicationContextHolder.get("genie_config")
+                #执行结果脱敏
                 content = text_desensitization(
                     msg.content,
-                    genie_config.sensitive_patterns,
+                    SENSITIVE_PATTERNS,
                 )
 
                 if is_claude:

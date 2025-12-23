@@ -2,6 +2,12 @@ from enum import Enum
 
 
 class ToolChoice(Enum):
+    """
+    none:明确禁止模型调用任何工具
+    auto:由模型自行判断是否需要调用工具  vLLM 默认不支持 auto，除非显式开启 --enable-auto-tool-choice --tool-call-parser
+    required:强制模型必须调用工具（至少一次）
+    """
+    
     NONE = "none"
     AUTO = "auto"
     REQUIRED = "required"

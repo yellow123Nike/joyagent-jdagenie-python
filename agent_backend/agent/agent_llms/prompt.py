@@ -36,3 +36,6 @@ STRUCT_PARSE_TOOL_SYSTEM_PROMPT = """
       有如下工具名和工具入参的介绍如下：
 """
 
+SENSITIVE_PATTERNS = {
+    "id_card": r"\b\d{17}[\dXx]\b",
+}

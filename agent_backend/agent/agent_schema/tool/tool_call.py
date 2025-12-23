@@ -16,7 +16,6 @@ class ToolCall:
     class Function:
         """
         函数信息类
-        对齐 Java: ToolCall.Function
         """
         name: Optional[str] = None
         arguments: Optional[str] = None
