@@ -3,113 +3,41 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import Any, Dict, List, Optional
-from enum import Enum, auto
-from dataclasses import dataclass, field
 
-
-# ===== enums =====
-
-class AgentState(Enum):
-    IDLE = auto()
-    FINISHED = auto()
-    ERROR = auto()
-
-
-class RoleType(Enum):
-    USER = "user"
-    SYSTEM = "system"
-    ASSISTANT = "assistant"
-    TOOL = "tool"
-
-
-# ===== DTO =====
-
-@dataclass
-class Message:
-    role: RoleType
-    content: str
-    base64_image: Optional[str] = None
-    tool_name: Optional[str] = None
-
-    @staticmethod
-    def user(content: str, base64_image: Optional[str] = None) -> "Message":
-        return Message(RoleType.USER, content, base64_image)
-
-    @staticmethod
-    def system(content: str, base64_image: Optional[str] = None) -> "Message":
-        return Message(RoleType.SYSTEM, content, base64_image)
-
-    @staticmethod
-    def assistant(content: str, base64_image: Optional[str] = None) -> "Message":
-        return Message(RoleType.ASSISTANT, content, base64_image)
-
-    @staticmethod
-    def tool(content: str, tool_name: str, base64_image: Optional[str] = None) -> "Message":
-        return Message(RoleType.TOOL, content, base64_image, tool_name)
-
-
-@dataclass
-class Memory:
-    messages: List[Message] = field(default_factory=list)
-
-    def add_message(self, message: Message):
-        self.messages.append(message)
-
-
-# ===== Tool =====
-
-class ToolCollection:
-    def __init__(self):
-        self._tools: Dict[str, Any] = {}
-
-    def register(self, name: str, func):
-        self._tools[name] = func
-
-    async def execute(self, name: str, args: Any) -> Any:
-        if name not in self._tools:
-            raise ValueError(f"Tool {name} not found")
-        tool = self._tools[name]
-        if asyncio.iscoroutinefunction(tool):
-            return await tool(args)
-        return tool(args)
-
-
-# ===== LLM / Context placeholders =====
-
-class LLM:
-    async def generate(self, messages: List[Message]) -> str:
-        raise NotImplementedError
-
-
-@dataclass
-class AgentContext:
-    request_id: str
-
+from pydantic import Field
+from agent_backend.agent.agent_core.agent_context import AgentContext
+from agent_backend.agent.agent_enums.agent_state import AgentState
+from agent_backend.agent.agent_enums.agent_type import RoleType
+from agent_backend.agent.agent_llms.llm import LLMClient
+from agent_backend.agent.agent_schema.memory import Memory
+from agent_backend.agent.agent_schema.message import Message
+from agent_backend.agent.agent_schema.tool.tool_call import ToolCall
+from agent_backend.agent.agent_tools.tool_collection import ToolCollection
 
 # ===== BaseAgent =====
 
 class BaseAgent:
     """
-    Python equivalent of com.jd.genie.agent.agent.BaseAgent
+    BaseAgent:
     """
 
     def __init__(
         self,
-        *,
-        name: str,
-        description: str = "",
-        system_prompt: str = "",
-        next_step_prompt: str = "",
-        llm: Optional[LLM] = None,
-        context: Optional[AgentContext] = None,
-        max_steps: int = 10,
-        duplicate_threshold: int = 2,
+        name: str= Field(description="Agent 的唯一名称，用于标识、日志记录与调度"),
+        description: str= Field(description="Agent 的职责说明（人类可读，不直接参与推理）"),
+        system_prompt: str= Field(description="系统级 Prompt,用于定义 Agent 的角色、能力边界与全局行为约束"),
+        next_step_prompt: str = Field(description="单步推理引导 Prompt，用于驱动 Agent 决定“下一步做什么”"),
+        llm: Optional[LLMClient] = Field(description="Agent 绑定的 LLM 实例，负责实际推理与文本生成"),
+        context: Optional[AgentContext] = Field(description="Agent 运行上下文，用于保存状态、历史对话及中间结果"),
+        max_steps: int=Field(default=10,description="Agent 允许执行的最大推理步数，用于防止无限循环"),
+        duplicate_threshold: int =Field(default=2,description="连续重复输出或决策的阈值，用于检测 Agent 是否陷入死循环"),
     ):
         # core
         self.name = name
         self.description = description
         self.system_prompt = system_prompt
         self.next_step_prompt = next_step_prompt
+        #角色级 / 组织级配置  --应该从配置中来
         self.digital_employee_prompt: Optional[str] = None
 
         self.available_tools = ToolCollection()
@@ -117,24 +45,22 @@ class BaseAgent:
         self.llm = llm
         self.context = context
 
-        # execution control
+        # 执行控制
         self.state = AgentState.IDLE
         self.max_steps = max_steps
         self.current_step = 0
         self.duplicate_threshold = duplicate_threshold
 
-        # printer（可选）
-        self.printer = None
 
     # ===== abstract step =====
-    async def step(self) -> str:
+    async def step(self):
         """
-        子类必须实现单步逻辑
+        执行单个 Agent 推理步骤
         """
         raise NotImplementedError
 
     # ===== main loop =====
-    async def run(self, query: str) -> str:
+    async def run(self, query: str):
         self.state = AgentState.IDLE
         self.current_step = 0
 
@@ -185,14 +111,14 @@ class BaseAgent:
         self.memory.add_message(msg)
 
     # ===== tool execution =====
-    async def execute_tool(self, command: Dict[str, Any]) -> str:
+    async def execute_tool(self, command: ToolCall):
         try:
-            func = command.get("function")
-            if not func or "name" not in func:
+            func = command.function
+            if not func or not func.name:
                 return "Error: Invalid function call format"
 
-            name = func["name"]
-            args = json.loads(func.get("arguments", "{}"))
+            name = func.name
+            args = json.loads(func.arguments or "{}")
 
             result = await self.available_tools.execute(name, args)
             req_id = self.context.request_id if self.context else "-"
@@ -202,17 +128,25 @@ class BaseAgent:
 
         except Exception as e:
             req_id = self.context.request_id if self.context else "-"
-            print(f"{req_id} execute tool {name} failed: {e}")
-            return f"Tool {name} Error."
+            print(f"{req_id} execute tool {name if 'name' in locals() else '-'} failed: {e}")
+            return f"Tool {name if 'name' in locals() else ''} Error."
 
-    async def execute_tools(self, commands: List[Dict[str, Any]]) -> Dict[str, str]:
+    async def execute_tools(self, commands: List[ToolCall]):
         """
-        并发执行多个工具调用（等价 Java CountDownLatch）
+        并发执行多个工具调用命令并返回执行结果
+        :param commands: 工具调用命令列表
+        :return: key 为 tool_call.id，value 为执行结果
         """
-        async def _run(cmd):
-            return cmd["id"], await self.execute_tool(cmd)
 
-        tasks = [_run(cmd) for cmd in commands]
+        async def _run_tool(tool_call: ToolCall):
+            try:
+                result = await self.execute_tool(tool_call)
+                return tool_call.id, result
+            except Exception as e:
+                return tool_call.id, f"Tool Error: {e}"
+
+        tasks = [asyncio.create_task(_run_tool(cmd)) for cmd in commands]
+
         results = await asyncio.gather(*tasks)
 
-        return {tool_id: output for tool_id, output in results}
+        return {tool_id: result for tool_id, result in results}

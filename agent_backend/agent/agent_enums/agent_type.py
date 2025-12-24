@@ -54,17 +54,14 @@ class RoleType(Enum):
 
     @property
     def value_str(self) -> str:
-        """等价于 Java 的 getValue()"""
         return self.value
 
     @staticmethod
     def is_valid(role: str) -> bool:
-        """等价于 Java 的 isValid(String role)"""
         return role in {r.value for r in RoleType}
 
     @staticmethod
     def from_string(role: str) -> "RoleType":
-        """等价于 Java 的 fromString(String role)"""
         for r in RoleType:
             if r.value == role:
                 return r

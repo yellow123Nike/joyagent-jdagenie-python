@@ -108,3 +108,5 @@ class ToolCollection:
             return None
 
         return self.digital_employees.get(tool_name)
+    def set_current_task(self, task: str):
+        self.current_task = task
