@@ -8,6 +8,13 @@
   react三段式思想：多轮循环(思考<Thought>--行动<Action>--观察<Observation>)--明确Finish
   react以搜索为例的行为链路：搜索主体--发现信息不足--细化搜索--聚焦指标--Finish
 
+  prompt约定式react：ReAct结构存在于Prompt文本中(用自然语言告诉模型：你应该按 Thought / Action / Observation 来做事)。
+  显式状态机式ReAct：Thought / Action / Observation的每个过程都是一个可判定、可执行的状态，控制权留在系统侧。
+    --Think:纯决策，只产生意图与计划。通过system_prompt约束的整体任务策略下运行，通过next_step_prompt驱动模型判断是否需要继续调用工具
+    --act:执行工具，只负责按照 Think 阶段给出的计划调用工具并记录观察结果；由系统基于结构化信号（如 tool_calls 是否为空）统一判断任务是否结束。
+  
+  任务什么时候结束：1.step约束(两者都有)，2.自动停(prompt约定式是祈祷模型听话,显式状态机式是让模型只判断是否需要调用工具，系统再来确实是否执行还是结束，明确 Finish 是系统判定，不是模型判定)
+
 test_react_impl_agent()的react过程：
 | 序号 | Role      | 内容摘要                                       | Tool 调用        | Tool 返回             |
 | -- | --------- | ------------------------------------------ | -------------- | ------------------- |
