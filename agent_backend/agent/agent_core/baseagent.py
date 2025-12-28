@@ -98,13 +98,13 @@ class BaseAgent:
         *args,
     ):
         if role == RoleType.USER:
-            msg = Message.user(content, base64_image)
+            msg = Message.user_message(content, base64_image)
         elif role == RoleType.SYSTEM:
-            msg = Message.system(content, base64_image)
+            msg = Message.system_message(content, base64_image)
         elif role == RoleType.ASSISTANT:
-            msg = Message.assistant(content, base64_image)
+            msg = Message.assistant_message(content, base64_image)
         elif role == RoleType.TOOL:
-            msg = Message.tool(content, args[0], base64_image)
+            msg = Message.tool_message(content, args[0], base64_image)
         else:
             raise ValueError(f"Unsupported role type: {role}")
 

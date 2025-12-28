@@ -12,7 +12,7 @@ from agent_backend.agent.agent_tools.tool_collection import ToolCollection
 params = LLMParams(
     model_name="Qwen/Qwen3-32B-AWQ",
     api_key="sk-",
-    base_url="http://192.0.0.0:18006/v1/",
+    base_url="http://0.0.0.0:18006/v1/",
     temperature=0.7,
     max_tokens=8024,
     is_claude=False,
@@ -82,3 +82,5 @@ async def test_ask_tool_function_call():
         function_call_type=FunctionCallType.STRUCT_PARSE,
     )
     print(result)
+    
+asyncio.run(test_ask_tool_function_call())

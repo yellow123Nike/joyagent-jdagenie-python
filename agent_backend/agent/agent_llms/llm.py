@@ -53,6 +53,7 @@ class LLMClient:
             api_key=params.api_key,
             base_url=params.base_url,
         )
+        self.function_call_type=None
 
     #格式化消息
     def format_messages(
@@ -346,19 +347,39 @@ class LLMClient:
             logger.exception("%s ask_llm_stream failed", context.request_id)
             raise
 
+    def _normalize_enum(self,value, enum_cls, name: str):
+        if isinstance(value, enum_cls):
+            return value
+        if isinstance(value, str):
+            try:
+                return enum_cls(value)
+            except ValueError:
+                raise ValueError(
+                    f"Invalid {name}: {value}, "
+                    f"must be one of {[e.value for e in enum_cls]}"
+                )
+        raise TypeError(
+            f"{name} must be {enum_cls.__name__} or str, got {type(value)}"
+        )
+
     async def ask_tool(
         self,
         context: AgentContext,
         messages: List[Message],
         tools: ToolCollection,
-        tool_choice: ToolChoice,
+        tool_choice: ToolChoice|str,
         system_msgs: Optional[Message],
-        function_call_type:FunctionCallType=FunctionCallType.FUNCTION_CALL
+        function_call_type:FunctionCallType| str =FunctionCallType.FUNCTION_CALL
     ) -> ToolCallResponse:
         try:
             # ===== 1. ToolChoice 校验=====
-            if not ToolChoice.is_valid(tool_choice):
-                raise ValueError(f"Invalid tool_choice: {tool_choice}")
+            self.function_call_type=function_call_type
+            tool_choice = self._normalize_enum(tool_choice, ToolChoice, "tool_choice")
+            function_call_type = self._normalize_enum(
+                function_call_type,
+                FunctionCallType,
+                "function_call_type"
+            )
             start_time = time.time()
             # ===== 2. 构造 OpenAI tools（对齐 function_call 分支） =====
             formatted_tools: list[dict] = []

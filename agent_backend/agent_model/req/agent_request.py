@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from agent_model.dto.file_information import FileInformation
+from agent_backend.agent_model.dto.file_information import FileInformation
 
 
 @dataclass
